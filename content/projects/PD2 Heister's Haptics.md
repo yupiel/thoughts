@@ -1,3 +1,14 @@
+---
+title: Payday 2 Mod - Heister's Haptics
+description: My slow descent into insanity while I try to figure out how to communicate with a Buttplug server from inside of a Payday 2 mod.
+date: 2024-05-02
+tags:
+  - Payday2
+  - Mod
+  - Modding
+  - Buttplug
+  - HeistersHaptics
+---
 ## Trying to get `ffi` and `require()` to work somehow
 `require` might not actually be scuffed if this error can be resolved?
 `loadfile` throws the same error
