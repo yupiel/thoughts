@@ -12,3 +12,4 @@ replit.nix
 
 #ignore git files in clones repositories for content
 /content/**/.git*
+/content/**/.git
