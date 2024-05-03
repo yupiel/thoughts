@@ -1,6 +1,8 @@
 ---
-title: Welcome to Quartz
+title: Brainworms
 ---
 
-This is a blank Quartz installation.
-See the [documentation](https://quartz.jzhao.xyz) for how to get started.
+In here you'll currently find notes I take for my personal projects.
+These aren't particularly organized and also aren't necessarily written for others to read.
+
+However if you find enjoyment in reading this stuff, knock yourself out.
