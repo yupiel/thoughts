@@ -99,7 +99,7 @@ function TestAPIHelper.queue_call(category_and_or_func_name, response_string, ar
 	local category = cat_func[1]
 	local func_name = cat_func[2]
 	Global.test_api.queued_calls = Global.test_api.queued_calls or {}
-
+	
 	-- starting from here
 	assert(
 		TestAPI[category], 
@@ -328,3 +328,12 @@ changed: Event { kind: Modify(Any), paths: ["C:\\Program Files (x86)\\Steam\\ste
 ```
 
 Where the path to log was passed as an argument, just like I did in the Lua example in the previous section. 
+
+##### IPC-File content format
+I'm not quite sure what format the actual messages in the IPC file should have. It's possible for them to just be a simple `+x` `-x` format for the vibration intensity, however I'm not sure if that'll suffice. For now I've set up JSON parsing from the IPC file, along with ignoring any modes are than `modified` because I don't want to accidentally capture the creation (or manual use deletion) of it.
+
+Failing to read the file or the JSON values out of it is just ignored with an error log at the moment but it seems to be the most reasonable way to handle those issues.
+`"Could not read content of IPC file. Ignoring last command..."`
+
+I'll discuss the actual format of the message with Siri, she has some experience with this after all.
+
