@@ -337,3 +337,18 @@ Failing to read the file or the JSON values out of it is just ignored with an er
 
 I'll discuss the actual format of the message with Siri, she has some experience with this after all.
 
+##### Possible new Angle found
+While talking to Siri I remembered that Lua **can** load in `.dll` files written in C that have the appropriate Lua bindings and export a `luaopen_packagename`.
+Surely those bindings should exist for rust too right? [They do.](https://github.com/mlua-rs/mlua)
+This is actually great news since it could let me circumvent the entire "running an exe as a separate process and communicating with it via IPC file" thing. I'll have to look into that a bit later.
+Although it seems that [building a Win32 `.dll` file from Linux](https://stackoverflow.com/questions/59385341/crosscompiling-rust-from-fedora-linux-host-to-windows-target-does-not-find-depen) is connected to a bit of cancer I'll have to read into more.
+
+However this does look quite promising if I can get it to compile properly and load it with `dofile()`.
+
+This was abandoned quickly for the same issues as loading any other `dll` didn't work before.
+##### Let's ask the experts
+I caved and went to the [modworkshop](https://modworkshop.net/) discord server, to ask someone if there's any way to load a `dll` into SuperBLT without it telling me to ~~stop performing blocking dns calls from the main thread~~ go die.
+
+Well known Payday 2 modder [Hoppip](https://modworkshop.net/user/hoppip) responded to me pretty quickly and pointed out, that SuperBLT has a Native Plugin Template and Native Plugin Library, which are specifically designed to create `dll`s which can be loaded in via `blt.load_native()` and their definition in a `supermod.xml` file.
+
+Now this was huge news and I took quite a bit of time to explore this method in detail, over at [[SuperBLT Native Plugin Template]]. I recommend you give it a read if you want to see me slowly descend into insanity.
