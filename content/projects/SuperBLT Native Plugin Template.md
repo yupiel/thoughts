@@ -647,7 +647,7 @@ lua closure: lua_gettop
 checkstack: userdata
 lua closure: lua_gettop
 checkstack: userdata
-lua closre: relax limit memory state
+lua closure: relax limit memory state
 checkstack: function
 checkstack: function
 lua closure: pre rotate: 0
