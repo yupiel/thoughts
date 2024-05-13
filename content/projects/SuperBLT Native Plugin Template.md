@@ -671,7 +671,7 @@ trying to push c func
 false
 ```
 
-If you really want to, you can probably vaguely see [where in the `init_from_ptr` function](https://github.com/mlua-rs/mlua/blob/8f3de8aa19ac7263297b080862c0a7a0ddb5de04/src/lua.rs#L449) I am by reading this but I wouldn't recommend trying to wrap your head around this if you're not proficient in rust and lua.
+If you really want to, you can probably vaguely see [where in the `init_from_ptr` function](https://github.com/mlua-rs/mlua/blob/8f3de8aa19ac7263297b080862c0a7a0ddb5de04/src/lua.rs#L449) I am by reading this but I wouldn't recommend trying to wrap your head around this if you're not proficient in rust and `lua`.
 
 Anyway onto my next stupid venture, attempting to convert from a `void*` to a function signature in rust.
 
