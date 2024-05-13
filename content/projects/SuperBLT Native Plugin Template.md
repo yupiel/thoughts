@@ -680,4 +680,4 @@ Sadly that didn't work for the returned functions signatures that I said I could
 
 ## Release?
 This is currently on hold until the main project [[PD2 Heister's Haptics]] is finished. 
-I'll probably have a bunch of useful safe function wrappers for the `lua` stuff by then and can consider a release of the plugin template, so I can safe people from actually having to write `C++`, which is what I consider my mission in life.
+I'll probably have a bunch of useful, safe, function wrappers for the `lua` stuff by then and can consider a release of the plugin template, so I can save people from actually having to write `C++`, which is what I consider my mission in life.
