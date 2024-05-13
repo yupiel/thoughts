@@ -1,3 +1,16 @@
+---
+title: SuperBLT Plugin Template
+description: My journey of porting the SuperBLT Plugin Template from C++ to Rust so I don't have to get cancer when writing the dll for Heister's Haptics
+date: 2024-05-11
+tags:
+  - Payday2
+  - Mod
+  - Modding
+  - HeistersHaptics
+  - SuperBLT
+  - Porting
+---
+
 Have you ever asked yourself what the best way to learn a language in depth is?
 Yeah don't do this I'm kind of masochistic.
 
@@ -69,7 +82,8 @@ This was defined in the [library's fptrs.h file](https://gitlab.com/SuperBLT/nat
 
 Recreating this structure was trivial, however the way this vector was filled with data was anything but. (For the sake of my own sanity I will exclude the code here that is not C++ specific and only gets run in a C context.)
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:4-6`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L4-6)
+```c++ showLineNumbers{4}
 #define IMPORT_FUNC(name, ret, ...) \
 	extern "C" { extern ret (*name)(__VA_ARGS__); }
 #else
@@ -78,27 +92,30 @@ Recreating this structure was trivial, however the way this vector was filled wi
 Now this basically tells me, that everything run inside of an `IMPORT_FUNC` gets turned into an externally defined `C` function. So far so good.
 However a bit later, we run into this:
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:27-30`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L27-30)
+```c++ showLineNumbers{27}
 #undef IMPORT_FUNC
 #define IMPORT_FUNC(name, ret, ...) \
 	extern "C" { ret (*name)(__VA_ARGS__) = 0; } \
 	AutoFuncSetup name ## _func_setup(#name, (void**) &name);
 ```
 
-Now this is only ran in a context where `INIT_FUNC` is defined, however this seems to be defined externally, i.e. in a SuperBLT context, when loading these dlls.
+Now this is only ran in a context where `INIT_FUNC` is defined, however this is [defined in the initi.cpp of the same repository](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/src/msw32/init.cpp#L2) so I don't quite get the point of having this here separately but this whole file is a clusterfuck anyway.
 This `IMPORT_FUNC` definition does the same as the first one, however also creates a new instance of `AutoFuncSetup` with the `name` and the memory address of the `name` cast to `void**`.
 
 > As far as I'm aware, the reference is not used anywhere, so we can probably safely ignore that part.
 
 This `IMPORT_FUNC` is also redefined by something called `CREATE_NORMAL_CALLABLE_SIGNATURE` in the same file. That looks like this:
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:1`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L1)
+```c++ showLineNumbers{1}
 #define CREATE_NORMAL_CALLABLE_SIGNATURE(name, ret, a, b, c, ...) IMPORT_FUNC(name, ret, __VA_ARGS__)
 ```
 
 Now then let's get to where this is used. Here's an example:
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:36`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L36)
+```c++ showLineNumbers{36}
 IMPORT_FUNC(is_active_state, bool, lua_State *L)
 ```
 
@@ -113,27 +130,47 @@ new AutoFuncSetup(*name, (void**) &name);
 
 `AutoFuncSetup`'s constructor also pushes this value into the aforementioned vector.
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:20-22`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L20-22)
+```c++ showLineNumbers{20}
 AutoFuncSetup(const char *name, void **ptr) : name(name), ptr(ptr) {
 	all_lua_funcs_list.push_back(this);
 }
 ```
 
-However when reading this information from the vector in the `SuperBLT_Plugin_Setup` functions, only the name is actually passed into the injected function, not the ptr. 
+However when reading this information from the vector in the `SuperBLT_Plugin_Setup` function, only the name is actually passed into the injected function, not the pointer `ptr`. 
 
-```c++
+[`native-plugin-library/src/msw32/init.cpp:14-17`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/src/msw32/init.cpp?ref_type=heads#L14-17)
+```c++ showLineNumbers{14}
 for (const auto &func_ptr : all_lua_funcs_list) {
 	AutoFuncSetup &func = *func_ptr;
 	*func.ptr = get_exposed_function(func.name);
 }
 ```
 
-The function `get_exposed_function` is injected internally by SuperBLT and, as far as I can see, reads out the name that's passed to it, checks if it matches any SuperBLT defined functions and if not passes it further down into `get_lua_func`.
+The function `get_exposed_function` is [injected internally by SuperBLT](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/plugins/plugins-w32.cpp#L87) and, as far as I can see, reads out the name that's passed to it, checks if it matches any SuperBLT defined functions and if not passes it further down into `get_lua_func`.
 
-```c++
+[`payday2-superblt/platforms/w32/plugins/plugins-w32.cpp:42-64`](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/plugins/plugins-w32.cpp#L42-64)
+```c++ showLineNumbers{42}
 static void* get_func(const char* name)
 {
-	//some checks against blt defined functions like pd2_log, etc.
+	string str = name;
+	if (str == "pd2_log")
+	{
+		return &pd2_log;
+	}
+	else if (str == "is_active_state")
+	{
+		return &is_active_state;
+	}
+	else if (str == "luaL_checkstack")
+	{
+		return &luaL_checkstack;
+	}
+	else if (str == "lua_rawequal")
+	{
+		return &lua_rawequal;
+	}
+	
 	return blt::platform::win32::get_lua_func(name);
 }
 ```
@@ -142,20 +179,23 @@ static void* get_func(const char* name)
 Then passes it even further down into `GetFunctionByName`.
 
 [payday2-superblt/platforms/w32/platform.cpp:190-199](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/platform.cpp#L190-199)
-```c++
+```c++ showLineNumbers{190}
 void* blt::platform::win32::get_lua_func(const char* name)
 {
 	// Only allow getting the Lua functions
 	if (strncmp(name, "lua", 3)) return NULL;
+	
 	// Don't allow getting the setup functions
 	if (!strncmp(name, "luaL_newstate", 13)) return NULL;
+	
 	return SignatureSearch::GetFunctionByName(name);
 }
 ```
 
 `GetFunctionByName` does a couple things but I'll need some setup to explain this.
 
-```c++
+[payday2-superblt/platforms/w32/signatures/signatures.cpp:411-425](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/signatures/signatures.cpp#L411-425)
+```c++ showLineNumbers{411}
 void* SignatureSearch::GetFunctionByName(const char* name)
 {
 	if (!allSignatures)
@@ -168,6 +208,7 @@ void* SignatureSearch::GetFunctionByName(const char* name)
 			return *(void**)sig.address;
 		}
 	}
+	
 	return NULL;
 }
 ```
@@ -175,13 +216,15 @@ void* SignatureSearch::GetFunctionByName(const char* name)
 First of all it checks if a variable called `allSignatures` is truthy.
 `allSignatures` is defined as a vector of `SignatureF` pointers and initialized as `NULL`.
 
-```c++
+[payday2-superblt/platforms/w32/signatures/signatures.cpp:308](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/signatures/signatures.cpp#L308)
+```c++ showLineNumbers{308}
 std::vector<SignatureF>* allSignatures = NULL;
 ```
 
 `SignatureF` is defined as follows:
 
-```c++
+[payday2-superblt/platforms/w32/signatures/signatures.h:14-22](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/signatures/signatures.h#L14-22)
+```c++ showLineNumbers{14}
 struct SignatureF
 {
 	const char* funcname;
@@ -195,7 +238,8 @@ struct SignatureF
 
 The creation of these happens in the constructor of `SignatureSearch`, where the struct is constructed and then pushed into the `allSignatures` vector.
 
-```c++
+[payday2-superblt/platforms/w32/signatures/signatures.cpp:308-321](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/signatures/signatures.cpp#L308-321)
+```c++ showLineNumbers{308}
 std::vector<SignatureF>* allSignatures = NULL;
 
 SignatureSearch::SignatureSearch(const char* funcname, void* adress, const char* signature, const char* mask, int offset, SignatureVR vr)
@@ -205,6 +249,7 @@ SignatureSearch::SignatureSearch(const char* funcname, void* adress, const char*
 	{
 		allSignatures = new std::vector<SignatureF>();
 	}
+	
 	SignatureF ins = {funcname, signature, mask, offset, adress, vr};
 	allSignatures->push_back(ins);
 }
@@ -212,7 +257,8 @@ SignatureSearch::SignatureSearch(const char* funcname, void* adress, const char*
 
 And where is this called? Well this might look a little familiar from the Native Plugin Library
 
-```c++
+[payday2-superblt/platforms/w32/signatures/sigdef.h:6-9](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/signatures/sigdef.h#L6-9)
+```c++ showLineNumbers{6}
 #define CREATE_NORMAL_CALLABLE_SIGNATURE(name, retn, signature, mask, offset, ...) \
 	typedef retn(*name ## ptr)(__VA_ARGS__); \
 	name ## ptr name = NULL; \
@@ -229,7 +275,8 @@ Anyway moving on...
 ## Wrong assumptions
 This basically means that the following signature from the Native Plugin Library:
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:40`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h#L40)
+```c++ showLineNumbers{40}
 CREATE_NORMAL_CALLABLE_SIGNATURE(lua_call, void, "\x8B\x44\x24\x08\x8B\x54\x24\x04\xFF\x44\x24\x0C\x8D\x0C\xC5\x00", "xxxxxxxxxxxxxxxx", 0, lua_State*, int, int)
 ```
 
@@ -248,7 +295,8 @@ new SignatureSearch(
 
 `SignatureVR` is just an enum defined in the same file as `SignatureF` and looks as follows:
 
-```c++
+[payday2-superblt/platforms/w32/signatures/signatures.h:7-12](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/signatures/signatures.h#L7-12)
+```c++ showLineNumbers{7}
 enum SignatureVR
 {
 	SignatureVR_Both,
@@ -258,19 +306,21 @@ enum SignatureVR
 ```
 
 ### Enlightenment
-At least that's what I thought yesterday, however after looking at the code again and talking it over with Siri for a bit, I came to the conclusion that I'm fucking stupid. It's not even, that I was wrong about *how* the code works. I went wrong in thinking the `CREATE_NORMAL_CABBALE_SIGNATURE` define worked the same in both `SuperBLT`s code and the Native Plugin Library.
+At least that's what I thought yesterday, however after looking at the code again and talking it over with Siri for a bit, I came to the conclusion that I'm fucking stupid. It's not even, that I was wrong about *how* the code works. I went wrong in thinking the `CREATE_NORMAL_CALLABLE_SIGNATURE` define worked the same in both `SuperBLT`s code and the Native Plugin Library.
 
 Let's look at the first \#define from [[SuperBLT Native Plugin Template#Down the define rabbit hole|Down the define rabbit hole]] again:
 
-```C++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:4-6`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L4-6)
+```c++ showLineNumbers{4}
 #define IMPORT_FUNC(name, ret, ...) \
 	extern "C" { extern ret (*name)(__VA_ARGS__); }
 #else
 ```
 
-I correctly assumed, that `__VA_ARGS__` just took all the arguments from `...` and shoved them into the function call. However what I failed to realize is that, the `...` here is different from the redefined `...` in:
+I correctly assumed, that `__VA_ARGS__` just took all the arguments from `...` and shoved them into the function call. However what I failed to realize is that, the `...` here is different from what I expected it to be, since `CREATE_NORMAL_CALLABLE_SIGNATURE` redefined `...` before passing it:
 
-```c++
+[`native-plugin-library/include/sblt_msw32_impl/fptrs.h:1`](https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h?ref_type=heads#L1)
+```c++ showLineNumbers{1}
 #define CREATE_NORMAL_CALLABLE_SIGNATURE(name, ret, a, b, c, ...) IMPORT_FUNC(name, ret, __VA_ARGS__)
 ```
 
@@ -279,7 +329,7 @@ No Signature, no mask, and no offset.
 
 So these are actually just normal external definitions, that I should be able to translate to rust as follows:
 
-```c++
+```c++ showLineNumbers{1}
 CREATE_NORMAL_CALLABLE_SIGNATURE(lua_call, void, "\x8B\x44\x24\x08\x8B\x54\x24\x04\xFF\x44\x24\x0C\x8D\x0C\xC5\x00", "xxxxxxxxxxxxxxxx", 0, lua_State*, int, int)
 ```
 
@@ -293,17 +343,17 @@ extern "C" {
 Well this really is kind of trivial. I should be able to just get all of these in and then get the dll to load right?
 
 ### Downfall
-So remember how [[SuperBLT Native Plugin Template#Initial Victories|in the first chapter]], when I set the exports of the dll to match the ones from the Native Plugin Library code. That I then checked against the Borderless Window Plugin's dll's exports?
+So remember how [[SuperBLT Native Plugin Template#Initial Victories|in the first chapter]], when I set the exports of the `dll` to match the ones from the Native Plugin Library code. That I then checked against the `Borderless Window Plugin`'s `dll`'s exports?
 
 Yeah turns out that I missed one very crucial step but I'll get to that in a second.
 First of all I'll talk about how I got to finding this out.
 
-After all the effort of previous chapters, I now had hand defined every lua function that's defined in the Native Plugin Library/Template in rust but still couldn't get the game to not crash and burn when loading the dll. However sadly this also meant, that my dll didn't actually want to build. See I assume for C++ to build the library it doesn't actually link the external symbols at compile time?
-I'm not sure though, I just know there's no lua lib/dll provided in there but the dll still builds.
-The linker Cargo ran however, actually required that I have a lua dll present to build, so I gave it one.
+After all the effort of previous chapters, I now had hand defined every `lua` function that's defined in the Native Plugin Library/Template in rust but still couldn't get the game to not crash and burn when loading the `dll`. However sadly this also meant, that my `dll` didn't actually want to build. See I assume for C++ to build the library it doesn't actually link the external symbols at compile time?
+I'm not sure though, I just know there's no `lua` `lib`/`dll` provided in there but the `dll` still builds.
+The linker ran by Cargo however, actually required that I have a `lua` `dll` present at compile time, so I gave it one.
 
-After comparing between the Borderless Window mod and mine however, I saw that the Borderless Window mod did in fact **not** have a lua dll included. So I know I did something wrong.
-However I ignored this for now and simply commented out every use of lua functions I had in my code. I had to get the dll to load first, before I could worry about any of the linking issues.
+After comparing between the Borderless Window mod and mine however, I saw that the Borderless Window mod did in fact **not** have a `lua` `dll` included. So I know I did something wrong.
+However I ignored this for now and simply commented out every use of `lua` functions I had in my code. I had to get the `dll` to load first, before I could worry about any of the linking issues.
 
 I wasn't really sure at which point it was failing and a look through the source code didn't really give me an indication.
 
@@ -342,7 +392,8 @@ After running down the functions in the SuperBLT repo for a while, I thought to 
 So of course I did the most reasonable thing and download the source of SuperBLT.
 Opened the folder in Visual Studio (since I kinda have to run this on Windows) and added some logging down the path the plugin load should take me.
 
-```c++
+[`payday2-superblt/src/plugins/plugins.cpp:125-149`](https://gitlab.com/znixian/payday2-superblt/-/blob/master/src/plugins/plugins.cpp#L125-149)
+```c++ 
 	PD2HOOK_LOG_LOG(string("Grabbing Plugin_init_State"));
 	setup_state = (setup_state_func_t) ResolveSymbol("SuperBLT_Plugin_Init_State");
 	if (!setup_state) throw string("Invalid dlhandle - missing setup_state func!");
@@ -380,6 +431,7 @@ So on and so forth. Just to see where exactly it is, that I'm getting kicked out
 
 And wouldn't you know it, I found the error pretty quickly... or well at least the place where I errored out.
 
+[`payday2-superblt/src/InitiateState.cpp:712-743`](https://gitlab.com/znixian/payday2-superblt/-/blob/master/src/InitiateState.cpp#L712-743)
 ```c++
 int luaF_load_native(lua_State* L)
 {
@@ -459,6 +511,7 @@ pub fn Plugin_PushLua(L: *mut lua_State) -> c_int {
 Well what could go wrong here? It couldn't have been the `unsafe` block, since I commented it out because of the linking issues I mentioned at the beginning of the chapter, however still no dice. 
 I am returning 1 here, as is done in the Native Plugin Template so that can't really be the issue either.
 
+[`native-plugin-template/src/main.cpp:20-65`](https://gitlab.com/SuperBLT/native-plugin-template/-/blob/master/src/main.cpp#L20-65)
 ```c++
 int Plugin_PushLua(lua_State *L) {
 	// Create a Lua table
@@ -479,7 +532,7 @@ I then commented out the `Plugin_PushLua()` function in my `SuperBLT_Plugin_Push
 ```rust
 #[no_mangle]
 pub extern "C" fn SuperBLT_Plugin_PushLua(L: *mut lua_State) {
-    Plugin_PushLua(L); //I never return the value here because i have a ;
+    Plugin_PushLua(L); //I never return the value here because i put a ;
 }
 ```
 
@@ -536,3 +589,95 @@ for &name in LUA_FUNCS.iter() {
 Realistically I shouldn't need it, since all this does is look up the function name and returning a `void*` to the functions address from inside SuperBLT. But that `void*` isn't ever used after this, so I assume I could probably safely ignore this.
 
 I'll stop here for now though and look more into this tomorrow.
+I can absolutely safely resume this part of the code without breaking anything, so I'll do just that but now to something else equally as cancerous.
+
+## Sisyphean Task
+As it turns out I like to bash my head against the wall to slowly push through and that's exactly what I did here. Let me explain...
+
+What I'm currently using to address lua is `*mut lua_State` a pointer to the `lua_State` that I get from `SuperBLT`s loader. This works and all but is kind of ugly to use because all the functions that use it are declared unsafe.
+However `mlua` actually has it's own [`Lua` struct](https://docs.rs/mlua/latest/mlua/struct.Lua.html), which has much nicer, safe, functions associated with it. And this thing does have a function to [convert from a `*mut lua_State` ](https://docs.rs/mlua/latest/mlua/struct.Lua.html#method.init_from_ptr)...
+I think you catch my drift.
+
+Anyway I spent the next 2 days frantically trying to get it to convert the `lua_State` injected from `SuperBLT` into an `mlua` Lua struct. Sadly without any results.
+
+I did however slowly go insane.
+First of all running `init_from_ptr()` directly doesn't work at all. It just kind of crashes when trying to load the `dll`, of course again without an error message.
+
+I then downloaded something called [`patch-crate`](https://crates.io/crates/patch-crate) (which i prefer to it's alternative 
+[`cargo-patch`](https://crates.io/crates/cargo-patch), although I seem to have the minority opinion in that) to attempt to:
+1. Debug my way through to see what the actual issue is in conversion
+	and
+2. To rectify any conversion issue to actually successfully create the Lua struct.
+
+The result of this was, as said, a 2 day long slow descent into insanity where I would:
+- add a `println!()`
+- see where it stops printing
+- check what the issue is
+- dump half the lua stack
+- point it to the right variable instead
+- run it again
+over and over and over again.
+
+In-between every step I of course had to build the `dll` and put it into the Payday 2 mods folder and start Payday 2 to capture some console output.
+
+Well as it turns out, after a lot of manual manipulation of the `mlua` and `mlua-sys` crates, that the conversion from the `lua_State` pointer provided by `SuperBLT` into an `mlua` Lua struct is not possible, due to the stack already having some kind of data on it before it's passed down to me.
+The change file that `patch-crate` had given me at the end, showed `+ 1400` and `- 600` lines. 
+All for naught.
+
+Be that as it may, I've simply decided to write my own reasonably safe wrappers in time and only use the `mlua-sys` crate instead of the `mlua` crate for it's defined lua bindings. I couldn't use any of the actual `mlua` functionality anyway.
+
+Here's an excerpt from one of the many console output snapshots i took when trying to run those heavily modified `mlua` and `mlua-sys` versions... for your amusement:
+
+```
+lua closure: pre rotate : 1
+first if: 5
+managed to lua rotate
+checkstack: userdata
+lua closure: pushlightuserdata
+checkstack: userdata
+lua closer: pcall
+checkstack: function
+lua closure: remove
+checkstack: userdata
+lua closure: ret 0
+xxx
+expect passed
+running protect lua closure
+lua closure: lua_gettop
+checkstack: userdata
+lua closure: lua_gettop
+checkstack: userdata
+lua closre: relax limit memory state
+checkstack: function
+checkstack: function
+lua closure: pre rotate: 0
+lua closure: pushlightuserdata
+checkstack: userdata
+lua closure: pcall
+checkstack: function
+lua closure: remove
+checkstackL userdata
+lua closure: ret 0
+get ref_thread, false
+get_gc_metatable : lua_rawgetp
+checkstack: table
+absindex: -10000
+checkstack: userdata
+checkstack: 0
+this should be something: nil
+this should not be true: true
+wrapped_failure_mt_ptr
+trying to push c func
+false
+```
+
+If you really want to, you can probably vaguely see [where in the `init_from_ptr` function](https://github.com/mlua-rs/mlua/blob/8f3de8aa19ac7263297b080862c0a7a0ddb5de04/src/lua.rs#L449) I am by reading this but I wouldn't recommend trying to wrap your head around this if you're not proficient in rust and lua.
+
+Anyway onto my next stupid venture, attempting to convert from a `void*` to a function signature in rust.
+
+tl;cbawriting: use `std::mem::transmute_copy()` with the pointer as an argument
+Sadly that didn't work for the returned functions signatures that I said I could safely ignore at the end of [[#Downfall]] so whatever we ignore it until it becomes an issue `xd`
+
+## Release?
+This is currently on hold until the main project [[PD2 Heister's Haptics]] is finished. 
+I'll probably have a bunch of useful safe function wrappers for the `lua` stuff by then and can consider a release of the plugin template, so I can safe people from actually having to write `C++`, which is what I consider my mission in life.

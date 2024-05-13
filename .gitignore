@@ -13,3 +13,6 @@ replit.nix
 #ignore git files in clones repositories for content
 /content/**/.git*
 /content/**/.git
+
+#remove docs... why is this even in here?
+/docs
