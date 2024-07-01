@@ -78,11 +78,11 @@ importers:
         specifier: ^0.4.5
         version: 0.4.5
       preact:
-        specifier: ^10.20.1
-        version: 10.21.0
+        specifier: ^10.22.1
+        version: 10.22.1
       preact-render-to-string:
         specifier: ^6.4.2
-        version: 6.4.2(preact@10.21.0)
+        version: 6.4.2(preact@10.22.1)
       pretty-bytes:
         specifier: ^6.1.1
         version: 6.1.1
@@ -1754,8 +1754,8 @@ packages:
     peerDependencies:
       preact: '>=10'
 
-  preact@10.21.0:
-    resolution: {integrity: sha512-aQAIxtzWEwH8ou+OovWVSVNlFImL7xUCwJX3YMqA3U8iKCNC34999fFOnWjYNsylgfPgMexpbk7WYOLtKr/mxg==}
+  preact@10.22.1:
+    resolution: {integrity: sha512-jRYbDDgMpIb5LHq3hkI0bbl+l/TQ9UnkdQ0ww+lp+4MMOdqaUYdFc5qeyP+IV8FAd/2Em7drVPeKdQxsiWCf/A==}
 
   prettier@3.2.5:
     resolution: {integrity: sha512-3/GWa9aOC0YeD7LUfvOG2NiDyhOWRvt1k+rcKhOuYnMY24iiCphgneUfJDyFXd6rZCAnuLBv6UeAULtrhT/F4A==}
@@ -3960,12 +3960,12 @@ snapshots:
 
   picomatch@2.3.1: {}
 
-  preact-render-to-string@6.4.2(preact@10.21.0):
+  preact-render-to-string@6.4.2(preact@10.22.1):
     dependencies:
-      preact: 10.21.0
+      preact: 10.22.1
       pretty-format: 3.8.0
 
-  preact@10.21.0: {}
+  preact@10.22.1: {}
 
   prettier@3.2.5: {}
 
