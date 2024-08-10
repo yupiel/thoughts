@@ -675,9 +675,330 @@ If you really want to, you can probably vaguely see [where in the `init_from_ptr
 
 Anyway onto my next stupid venture, attempting to convert from a `void*` to a function signature in rust.
 
-tl;cbawriting: use `std::mem::transmute_copy()` with the pointer as an argument
+tl;cbawriting use `std::mem::transmute_copy()` with the pointer as an argument
 Sadly that didn't work for the returned functions signatures that I said I could safely ignore at the end of [[#Downfall]] so whatever we ignore it until it becomes an issue `xd`
 
 ## Release?
 This is currently on hold until the main project [[PD2 Heister's Haptics]] is finished. 
 I'll probably have a bunch of useful, safe, function wrappers for the `lua` stuff by then and can consider a release of the plugin template, so I can save people from actually having to write `C++`, which is what I consider my mission in life.
+
+# Update 2024/08/10
+It's been a while hasn't it... I'm just here to write an update for this, since I picked the project back up.
+
+## Broken
+So downloading my repo and trying to compile and load it from a mod... didn't work.
+I have no idea, genuinely, how it ever worked. With what I know now, it makes no sense to me, that I ever got it to work with the old setup.
+
+Remember the thing I talked about right before the [[SuperBLT Native Plugin Template#Release?|Release?]] paragraph in here? Yeah I have no idea how I managed to fail casting the `void*` there to their respective function signatures. It worked just fine this time. In fact it worked so well, that I've done it for all of them.
+
+The bigger issue for me was having to deep dive into macros to keep the project somewhat readable. I always kind of sucked at writing rust macros but I feel like I have an... at least decent handle on them now.
+
+## Restored
+Now I'm sure you're asking yourself how this all looks like... well let me show you.
+The `SuperBLT_Plugin_Setup` function has evolved into this:
+
+```rust
+#[no_mangle]
+pub extern "C" fn SuperBLT_Plugin_Setup(get_exposed_function: lua_access_func) {
+    //We take out the logging function separately to spread our macros throughout the project
+    let pd2_log_func_cstring = CString::new("pd2_log").unwrap();
+    PD2HOOK_LOG.get_or_init(|| unsafe {
+std::mem::transmute_copy(&get_exposed_function(pd2_log_func_cstring.as_ptr()))
+    });
+    
+    //all panics will now produce error logs in mods/logs
+    panic::set_hook(Box::new(|panic_info| {
+        PD2HOOK_LOG_PANIC!("{}", panic_info);
+    }));
+
+    //this imports everything declared with IMPORT_FUNC or
+    //CREATE_NORMAL_CALLABLE_SIGNATURE in SuperBLT's native plugin library
+    //https://gitlab.com/SuperBLT/native-plugin-library/-/blob/master/include/sblt_msw32_impl/fptrs.h
+    let mut superblt_instance = SUPERBLT.lock().unwrap();
+    for func_name in SUPERBLT_EXPORTED_FUNCTIONS.into_iter() {
+        let curr_func_name = CString::new(func_name.to_owned()).unwrap();
+        superblt_instance.import_function(*func_name, get_exposed_function(curr_func_name.as_ptr()));
+    }
+
+    blt_funcs::plugin_init();
+}
+```
+
+Now half of this stuff you haven't seen before but let me explain what's actually happening here really quickly.
+
+### Logging
+```rust
+let pd2_log_func_cstring = CString::new("pd2_log").unwrap();
+PD2HOOK_LOG.get_or_init(|| unsafe {
+	std::mem::transmute_copy(&get_exposed_function(pd2_log_func_cstring.as_ptr()))
+});
+```
+
+This part basically takes the string literal (`&str`) `"pd2_log"` and turns it into a `const char*` (`*const c_char` in rust). Then It initializes a [`OnceLock`](https://doc.rust-lang.org/nightly/std/sync/struct.OnceLock.html) called `PD2HOOK_LOG` by casting the `void*` (`*mut c_void` in rust), returned by SuperBLT's lookup function:
+
+[`payday2-superblt/platforms/w32/plugins/plugins-w32.cpp:42-64`](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/plugins/plugins-w32.cpp?ref_type=heads#L42-64)
+```c++
+static void * get_func(const char* name)
+{
+	string str = name;
+	if (str == "pd2_log")
+	{
+		return &pd2_log;
+	}
+	else if (str == "is_active_state")
+	{
+		return &is_active_state;
+	}
+	else if (str == "luaL_checkstack")
+	{
+		return &luaL_checkstack;
+	}
+	else if (str == "lua_rawequal")
+	{
+		return &lua_rawequal;
+	}
+	return blt::platform::win32::get_lua_func(name);
+}
+```
+
+to the expected function signature, which is defined on `PD2HOOK_LOG` itself:
+
+```rust
+pub static PD2HOOK_LOG: OnceLock<
+    fn(message: *const c_char, level: c_int, file: *const c_char, line: c_int),
+> = OnceLock::new();
+```
+
+Which is just a direct translation of the `pd2_log` function found in the same file:
+
+[`payday2-superblt/platforms/w32/plugins/plugins-w32.cpp:14-35`](https://gitlab.com/znixian/payday2-superblt/-/blob/master/platforms/w32/plugins/plugins-w32.cpp?ref_type=heads#L14-35)
+```c++
+static void pd2_log(const char* message, int level, const char* file, int line)
+{
+	using LT = pd2hook::Logging::LogType;
+	char buffer[256];
+	sprintf_s(buffer, sizeof(buffer), "ExtModDLL %s", file);
+	switch ((LT)level)
+	{
+	case LT::LOGGING_FUNC:
+	case LT::LOGGING_LOG:
+	case LT::LOGGING_LUA:
+		PD2HOOK_LOG_LEVEL(message, (LT)level, buffer, line, FOREGROUND_RED, FOREGROUND_BLUE, FOREGROUND_INTENSITY);
+		break;
+	case LT::LOGGING_WARN:
+		PD2HOOK_LOG_LEVEL(message, (LT)level, buffer, line, FOREGROUND_RED, FOREGROUND_GREEN, FOREGROUND_INTENSITY);
+		break;
+	case LT::LOGGING_ERROR:
+		PD2HOOK_LOG_LEVEL(message, (LT)level, buffer, line, FOREGROUND_RED, FOREGROUND_INTENSITY);
+		break;
+	}
+}
+```
+
+After all that I can simply use pd2_log the same way they would. Although they don't really use this `pd2_log` function internally but I digress. I then created macros that are usable globally, which use this function in the same way I would use, for example `PD2HOOK_LOG_LOG`, in the `C++` version of the Native Plugin Template.
+
+Let me show a single example for brevity:
+
+The base of all the logging functions is a macro called `PD2HOOK_LOG_LEVEL`, which is only vaguely related to it's `C++` counterpart.
+
+```rust
+macro_rules! PD2HOOK_LOG_LEVEL {
+    ($level:path; $($arg:tt)*) => {
+        let log_message_cstring = CString::new(std::fmt::format(format_args!($($arg)*))).unwrap();
+        let file_cstring = CString::new(file!()).unwrap();
+
+        $crate::superblt::pd2_logger::PD2HOOK_LOG.get().unwrap()(
+            log_message_cstring.as_ptr(),
+            $level as std::ffi::c_int,
+            file_cstring.as_ptr(),
+            line!() as c_int,
+        )
+    };
+```
+
+I have to use macros for this, because otherwise I will not get the correct filename and line number from the `file!()` and `line!()` macros. Since these are expanded in place during compilation.
+
+And here's `PD2HOOK_LOG_LOG` using that base macro:
+
+```rust
+macro_rules! PD2HOOK_LOG_LOG {
+    ($($arg:tt)*) => {
+        $crate::superblt::pd2_logger::PD2HOOK_LOG_LEVEL!(
+            $crate::superblt::pd2_logger::LogType::LOGGING_LOG;
+            $($arg)*
+        )
+    };
+}
+```
+
+Without explaining too much how macros work, I'd like to talk about a trick I pulled here to make the Log function properly usable. `$($arg:tt)*` is *more or less* equivalent to C++ `VA_ARGS`. The definition of `log_message_cstring` basically just takes all arguments passed and treats them the same way the built-in `format!()` macro would. I'm sure you can see the resemblance here
+
+[`std::format`](https://doc.rust-lang.org/1.80.1/src/alloc/macros.rs.html#123-128)
+```rust
+macro_rules! format {
+    ($($arg:tt)*) => {{
+        let res = $crate::fmt::format($crate::__export::format_args!($($arg)*));
+        res
+    }}
+}
+```
+
+This then allows me to use `PD2HOOK_LOG_LOG` like this for example:
+
+```rust
+PD2HOOK_LOG_LOG!("Connecting to address: {}", ip_addr);
+```
+
+And have it produce a console output like this:
+
+```
+04:37:25 PM Log:  (ExtModDLL src\haptics\connector.rs:53) Connecting to address: ws://127.0.0.1:12345
+```
+
+### Panic
+```rust
+panic::set_hook(Box::new(|panic_info| {
+    PD2HOOK_LOG_PANIC!("{}", panic_info);
+}));
+```
+
+This is more or less self explanatory, if you're aware of what [`panic::set_hook`](https://doc.rust-lang.org/std/panic/fn.set_hook.html) does.
+Basically, every time the application would panic (*more or less* equivalent to throwing an unhandled exception), instead of producing a standard error log, it will instead use one of my `PD2HOOK_LOG` logging functions to output to the SuperBLT developer console.
+
+`panic_info` is just whatever the usual panic message would be.
+
+### Function Signature Import
+```rust
+let mut superblt_instance = SUPERBLT.lock().unwrap();
+for func_name in SUPERBLT_EXPORTED_FUNCTIONS.into_iter() {
+	let curr_func_name = CString::new(func_name.to_owned()).unwrap();
+        superblt_instance.import_function(*func_name, get_exposed_function(curr_func_name.as_ptr()));
+}
+```
+
+Now for the real meat and potatoes.
+Let's talk about `SUPERBLT` first. `SUPERBLT` is a struct that holds a `HashMap`, basically a key-value pair unsorted list, that associates a function name with a pointer to that function. Now this list starts out empty, obviously and gets filled right here in the `Init` function.
+
+This is the basic definition of the `SuperBLT` struct.
+
+```rust
+#[derive(Clone, Default)]
+pub struct SuperBLT {
+	function_list: HashMap<String, *mut c_void>,
+}
+```
+
+It also implements `Send` because I need to use it across threads later on but let's ignore all that stuff for now. The only other thing defined here is two functions, to add to this private `HashMap`.
+
+```rust
+impl SuperBLT {
+    pub fn import_function(&mut self, function_name: &str, function_pointer: *mut c_void) {
+        self.function_list
+            .insert(function_name.into(), function_pointer);
+    }
+
+    pub fn get_function(&self, function_name: &str) -> &*mut c_void {
+        self.function_list.get(function_name).unwrap_or(&null_mut())
+    }
+}
+```
+
+Now `SUPERBLT` is the same as `PD2HOOK_LOG` in the sense that it's just a globally unique instance of the `SuperBLT` struct. It's defined as follows:
+
+```rust
+pub static SUPERBLT: LazyLock<Mutex<SuperBLT>> = LazyLock::new(|| Mutex::new(SuperBLT::default()));
+```
+
+The reason I use a [`LazyLock`](https://doc.rust-lang.org/std/sync/struct.LazyLock.html) here instead of a [`OnceLock`](https://doc.rust-lang.org/std/sync/struct.OnceLock.html) is that I need to do the default initialization in place, before trying to insert stuff into it. It also makes accessing the `SUPERBLT` instance less messy in code later.
+
+Now `SUPERBLT_EXPORTED_FUNCTIONS` is simply an array of string literals (`&str`) that contains all of the SuperBLT internal and lua functions that I could possible import. Here's a **very** abbreviated version:
+
+```rust
+pub const SUPERBLT_EXPORTED_FUNCTIONS: &[&str] = &[
+    // superblt special handling
+    "is_active_state",
+    "luaL_checkstack",
+    "lua_rawequal",
+
+    // direct lua export
+    "lua_call",
+    "lua_pcall",
+    "lua_gettop",
+    "lua_settop",
+    "lua_toboolean",
+    // ...
+];
+```
+
+Of course I exclude `pd2_log` here, because I import it separately, as mentioned in [[SuperBLT Native Plugin Template#Logging|Logging]].
+Anyway, I iterate over every string here, turn it into a `const char*`, then shove it into the function that's injected by SuperBLT, and save the returned `void*` as well as the name of the function itself into the `SuperBLT` struct's `HashMap`.
+
+#### Casting the function pointers
+As mentioned before though, I need to cast these pointers to the actual function signature with [`std::mem::transmute_copy`](https://doc.rust-lang.org/std/mem/fn.transmute_copy.html). There's many ways to do this. Initially I wrote a ton of functions inside of the `impl` block of my `SuperBLT` struct, which looked something like this:
+
+```rust
+pub fn lua_call(&self, L: *mut lua_State, nargs: c_int, nresults: c_int) {
+  let actual_func: fn(L: *mut lua_State, nargs: c_int, nresults: c_int) = unsafe {
+    std::mem::transmute_copy(
+      &self
+        .function_list
+        .get("lua_call")
+        .unwrap(),
+      )
+    };
+
+  actual_func(L, nargs, nresults)
+}
+```
+
+But after writing like idk 10 of these I thought
+- This is fucking awful I don't want to write a million of these
+- I should cache the cast so I don't have to cast this every time I call the function
+
+Those two points made me look into rust macros more, to write something similar to what the SuperBLT devs used with the `CREATE_NORMAL_CALLABLE_SIGNATURE` pre-processor macro.
+
+After like 3 iterations of this, I present to you the final macro I used:
+
+```rust
+macro_rules! create_blt_callable {
+    ($func_name:ident, $($param:tt: $ty:ty), *; $ret:ty) => {
+        pub fn $func_name(&self, $($param:$ty), *) -> $ret {
+            static ACTUAL_FUNC: std::sync::OnceLock<fn($($param:$ty), *) -> $ret> = std::sync::OnceLock::new();
+            ACTUAL_FUNC.get_or_init(|| unsafe {std::mem::transmute_copy(
+                self.get_function(stringify!($func_name))
+            )})($($param), *)
+        }
+    };
+}
+```
+
+It takes a `func_name` which is self explanatory, a variable number of comma separated parameters defined as `param_name: type` via `$($param:tt: $ty:ty), *`, and a return type, which is to be defined after a semicolon with the last `; $ret:ty` part.
+
+Now with the help of this macro I was able to simplify my previous function definitions to just this:
+
+```rust
+create_blt_callable!(lua_call, L: *mut lua_State, nargs: c_int, nresults: c_int; ());
+```
+
+`()` in rust is equivalent to `void`. Although later on i let the macro have `$ret:ty` as an optional argument, so that part wasn't necessary anymore either. Now my `impl` for the `SuperBLT` struct looks as follows:
+
+```rust
+impl SuperBLT {
+	create_blt_callable!(lua_call, L: *mut lua_State, nargs: c_int, nresults: c_int);
+	create_blt_callable!(lua_pcall, L: *mut lua_State, nargs: c_int, nresults: c_int, errfunc: c_int; c_int);
+	create_blt_callable!(lua_gettop, L: *mut lua_State; c_int);
+	create_blt_callable!(lua_settop, L: *mut lua_State, index: c_int);
+	create_blt_callable!(lua_toboolean, L: *mut lua_State, index: c_int; c_int);
+	// ...
+}
+```
+
+Of course there's a lot more of these but this sure simplified the entire process. Plus the macro would cache all of them in a [`OnceLock`](https://doc.rust-lang.org/std/sync/struct.OnceLock.html) too so I killed two birds with one stone.
+
+There's a whole lot of functions that are not exported by SuperBLT though, a lot of them `luaL` functions. These I'd have to re-implement myself, but that's a trivial issue after getting all of this to work.
+
+All that was left now... was to actually get Haptics to work as intended.
+The Template **will** be released once we're done with `Heister's Haptics` and until then we'll probably be implementing a lot more stuff that isn't exported. So far it's the bare minimum.
+Thank you for reading the update though, if you did. 
+
+I noticed this site is one of the first couple results that come up when you google some specific keywords so, sorry you had to read all of this rambling, but also you're welcome if you learned something. I hope you were entertained anyway.
